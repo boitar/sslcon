@@ -42,6 +42,8 @@ func ConfigInterface(cSess *session.ConnSession) error {
 }
 
 func SetRoutes(cSess *session.ConnSession) error {
+	cSess.DNSApplied = false
+
 	// routes
 	dst, err := netip.ParsePrefix(cSess.ServerAddress + "/32")
 	nextHopGateway, _ = netip.ParseAddr(base.LocalInterface.Gateway)
@@ -79,10 +81,23 @@ func SetRoutes(cSess *session.ConnSession) error {
 	}
 
 	// dns
-	if len(cSess.DNS) > 0 {
-		err = setDNS(cSess)
+	if base.Cfg.NoDNS {
+		for _, ip := range privateDNSRoutesToAdd(cSess.DNS, cSess.SplitInclude) {
+			dst, parseErr := netip.ParsePrefix(ip + "/32")
+			if parseErr != nil {
+				continue
+			}
+			if err = iface.AddRoute(dst, nextHopVPN, 6); err != nil && !isRouteExistsError(err) {
+				return routingError(dst, err)
+			}
+		}
+	} else if len(cSess.DNS) > 0 {
+		if err = setDNS(cSess); err != nil {
+			return err
+		}
+		cSess.DNSApplied = true
 	}
-	return err
+	return nil
 }
 
 func ResetRoutes(cSess *session.ConnSession) {

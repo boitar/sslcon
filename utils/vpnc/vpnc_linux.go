@@ -35,6 +35,8 @@ func ConfigInterface(cSess *session.ConnSession) error {
 }
 
 func SetRoutes(cSess *session.ConnSession) error {
+	cSess.DNSApplied = false
+
 	// routes
 	dst, _ := netlink.ParseIPNet(cSess.ServerAddress + "/32")
 	gateway := net.ParseIP(base.LocalInterface.Gateway)
@@ -86,8 +88,20 @@ func SetRoutes(cSess *session.ConnSession) error {
 		}
 	}
 
-	if len(cSess.DNS) > 0 {
+	if base.Cfg.NoDNS {
+		for _, ip := range privateDNSRoutesToAdd(cSess.DNS, cSess.SplitInclude) {
+			dst, parseErr := netlink.ParseIPNet(ip + "/32")
+			if parseErr != nil {
+				continue
+			}
+			route = netlink.Route{LinkIndex: ifaceIndex, Dst: dst, Priority: 6}
+			if err = netlink.RouteAdd(&route); err != nil && !isRouteExistsError(err) {
+				return routingError(dst, err)
+			}
+		}
+	} else if len(cSess.DNS) > 0 {
 		setDNS(cSess)
+		cSess.DNSApplied = true
 	}
 
 	return nil
@@ -130,8 +144,9 @@ func ResetRoutes(cSess *session.ConnSession) {
 		})
 	}
 
-	if len(cSess.DNS) > 0 {
+	if cSess.DNSApplied {
 		restoreDNS(cSess)
+		cSess.DNSApplied = false
 	}
 }
 

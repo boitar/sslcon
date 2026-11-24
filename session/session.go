@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"go.uber.org/atomic"
 	"sslcon/base"
@@ -44,6 +45,9 @@ type ConnSession struct {
 	VPNAddress    string // The IPv4 address of the client
 	VPNMask       string // IPv4 netmask
 	DNS           []string
+	DNSApplied    bool
+	DefaultDomain string
+	SplitDNS      []string
 	MTU           int
 	SplitInclude  []string
 	SplitExclude  []string
@@ -110,7 +114,9 @@ func (sess *Session) NewConnSession(header *http.Header) *ConnSession {
 	cSess.VPNAddress = header.Get("X-CSTP-Address")
 	cSess.VPNMask = header.Get("X-CSTP-Netmask")
 	cSess.MTU, _ = strconv.Atoi(header.Get("X-CSTP-MTU"))
-	cSess.DNS = header.Values("X-CSTP-DNS")
+	cSess.DNS = parseHeaderValues(header.Values("X-CSTP-DNS"))
+	cSess.DefaultDomain = strings.TrimSpace(header.Get("X-CSTP-Default-Domain"))
+	cSess.SplitDNS = parseHeaderValues(header.Values("X-CSTP-Split-DNS"))
 	// 如果服务器下发空字符串，字符串数组不会为 nil，会导致解析ip时报错
 	cSess.SplitInclude = header.Values("X-CSTP-Split-Include")
 	cSess.SplitExclude = header.Values("X-CSTP-Split-Exclude")
@@ -152,6 +158,27 @@ func (sess *Session) NewConnSession(header *http.Header) *ConnSession {
 	}
 
 	return cSess
+}
+
+func parseHeaderValues(values []string) []string {
+	var result []string
+	seen := make(map[string]struct{})
+	for _, v := range values {
+		parts := strings.FieldsFunc(v, func(r rune) bool {
+			return r == ',' || unicode.IsSpace(r)
+		})
+		for _, p := range parts {
+			if p == "" {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 func (cSess *ConnSession) DPDTimer() {

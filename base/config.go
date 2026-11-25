@@ -11,6 +11,7 @@ type ClientConfig struct {
 	InsecureSkipVerify bool   `json:"skip_verify"`
 	CiscoCompat        bool   `json:"cisco_compat"`
 	NoDTLS             bool   `json:"no_dtls"`
+	NoDNS              bool   `json:"no_dns"`
 	AgentName          string `json:"agent_name"`
 	AgentVersion       string `json:"agent_version"`
 }

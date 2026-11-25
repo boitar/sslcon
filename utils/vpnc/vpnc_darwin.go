@@ -12,19 +12,26 @@ import (
 	"sslcon/utils"
 )
 
-var VPNAddress string
+var (
+	VPNAddress string
+	runCmd     = execCmd
+	applyDNS   = setDNS
+	revertDNS  = restoreDNS
+)
 
 func ConfigInterface(cSess *session.ConnSession) error {
 	VPNAddress = cSess.VPNAddress
 	cmdStr1 := fmt.Sprintf("ifconfig %s inet %s %s netmask %s up", cSess.TunName, cSess.VPNAddress, cSess.VPNAddress, "255.255.255.255")
-	err := execCmd([]string{cmdStr1})
+	err := runCmd([]string{cmdStr1})
 
 	return err
 }
 
 func SetRoutes(cSess *session.ConnSession) error {
+	cSess.DNSApplied = false
+
 	cmdStr1 := fmt.Sprintf("route add -host %s %s", cSess.ServerAddress, base.LocalInterface.Gateway)
-	err := execCmd([]string{cmdStr1})
+	err := runCmd([]string{cmdStr1})
 	if err != nil {
 		return err
 	}
@@ -33,7 +40,7 @@ func SetRoutes(cSess *session.ConnSession) error {
 		for _, ipMask := range cSess.SplitInclude {
 			dst := utils.IpMaskToCIDR(ipMask)
 			cmdStr := fmt.Sprintf("route add -net %s %s", dst, cSess.VPNAddress)
-			err = execCmd([]string{cmdStr})
+			err = runCmd([]string{cmdStr})
 			if err != nil {
 				return routingError(dst, err)
 			}
@@ -44,7 +51,7 @@ func SetRoutes(cSess *session.ConnSession) error {
 		for _, ipMask := range cSess.SplitExclude {
 			dst := utils.IpMaskToCIDR(ipMask)
 			cmdStr := fmt.Sprintf("route add -net %s %s", dst, base.LocalInterface.Gateway)
-			err = execCmd([]string{cmdStr})
+			err = runCmd([]string{cmdStr})
 			if err != nil {
 				return routingError(dst, err)
 			}
@@ -52,11 +59,29 @@ func SetRoutes(cSess *session.ConnSession) error {
 	}
 
 	// dns
-	if len(cSess.DNS) > 0 {
-		err = setDNS(cSess)
+	if base.Cfg.NoDNS {
+		if err = addPrivateDNSRoutes(cSess); err != nil {
+			return err
+		}
+	} else if len(cSess.DNS) > 0 {
+		if err = applyDNS(cSess); err != nil {
+			return err
+		}
+		cSess.DNSApplied = true
 	}
 
-	return err
+	return nil
+}
+
+func addPrivateDNSRoutes(cSess *session.ConnSession) error {
+	for _, ip := range privateDNSRoutesToAdd(cSess.DNS, cSess.SplitInclude) {
+		dst := ip + "/32"
+		cmdStr := fmt.Sprintf("route add -net %s %s", dst, cSess.VPNAddress)
+		if err := runCmd([]string{cmdStr}); err != nil && !isRouteExistsError(err) {
+			return routingError(dst, err)
+		}
+	}
+	return nil
 }
 
 func ResetRoutes(cSess *session.ConnSession) {
@@ -64,13 +89,13 @@ func ResetRoutes(cSess *session.ConnSession) {
 	// cmdStr2 := fmt.Sprintf("route add default %s", base.LocalInterface.Gateway)
 
 	cmdStr3 := fmt.Sprintf("route delete -host %s %s", cSess.ServerAddress, base.LocalInterface.Gateway)
-	_ = execCmd([]string{cmdStr3})
+	_ = runCmd([]string{cmdStr3})
 
 	if len(cSess.SplitExclude) > 0 {
 		for _, ipMask := range cSess.SplitExclude {
 			dst := utils.IpMaskToCIDR(ipMask)
 			cmdStr := fmt.Sprintf("route delete -net %s %s", dst, base.LocalInterface.Gateway)
-			_ = execCmd([]string{cmdStr})
+			_ = runCmd([]string{cmdStr})
 		}
 	}
 
@@ -80,15 +105,16 @@ func ResetRoutes(cSess *session.ConnSession) {
 			for _, ip := range ips {
 				dst := ip + "/32"
 				cmdStr := fmt.Sprintf("route delete -net %s %s", dst, base.LocalInterface.Gateway)
-				_ = execCmd([]string{cmdStr})
+				_ = runCmd([]string{cmdStr})
 			}
 
 			return true
 		})
 	}
 
-	if len(cSess.DNS) > 0 {
-		restoreDNS(cSess)
+	if cSess.DNSApplied {
+		revertDNS(cSess)
+		cSess.DNSApplied = false
 	}
 }
 
@@ -96,7 +122,7 @@ func DynamicAddIncludeRoutes(ips []string) {
 	for _, ip := range ips {
 		dst := ip + "/32"
 		cmdStr := fmt.Sprintf("route add -net %s %s", dst, VPNAddress)
-		_ = execCmd([]string{cmdStr})
+		_ = runCmd([]string{cmdStr})
 	}
 }
 
@@ -104,7 +130,7 @@ func DynamicAddExcludeRoutes(ips []string) {
 	for _, ip := range ips {
 		dst := ip + "/32"
 		cmdStr := fmt.Sprintf("route add -net %s %s", dst, base.LocalInterface.Gateway)
-		_ = execCmd([]string{cmdStr})
+		_ = runCmd([]string{cmdStr})
 	}
 }
 
